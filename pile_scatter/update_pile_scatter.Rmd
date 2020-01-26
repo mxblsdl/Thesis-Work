@@ -1,0 +1,112 @@
+---
+title: "pile_scatter_update"
+author: "Max Blasdel"
+date: "3/13/2019"
+output: html_document
+---
+
+# use tidyverse to find percent ground contact and percent above ground
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message=FALSE}
+library(tidyverse)
+library(magrittr)
+```
+
+read in data
+drop unneeded columns
+
+```{r}
+dat <- read.csv("boston.csv", stringsAsFactors = F) %>% 
+  select(-c(site,
+            type, 
+            area_unit, 
+            scattered, 
+            total_biomass,
+            percent_piles))
+
+dat %>% head(n = 7)
+```
+
+I think I want to use the gross pile volume as that would have the correct height
+
+```{r}
+dat %<>%
+  mutate(vol_per_pile = gross_pv/pile_count,
+         area_per_pile_sqm = pile_area / pile_count * 10000, # convert ha to meters
+         pile_width = sqrt(area_per_pile_sqm / pi) * 2)
+```
+
+The equation $$V=(pi*H*W^2)/8$$ describes the volume of the paraboloid. 
+
+Solving for H as $$H=(V*8)/(pi*W^2)$$
+
+```{r}
+dat %<>% 
+  mutate(pile_height = (vol_per_pile * 8) / (pi * pile_width^2))
+dat
+```
+
+Calculate amount in ground contact and amount above ground
+Based on .5 meter distinction between GC and AG material
+Computes to roughly 80/20 split proposed by Van Lear
+
+```{r}
+dist_ground = 0.3048
+
+dat %<>% 
+  mutate(gc = vol_per_pile - (pi * (pile_height - dist_ground) * pile_width^2)/8,
+         ag = vol_per_pile - gc,
+         per_gc = gc / (gc + ag) * 100,
+         per_ag = ag / (gc + ag) * 100)
+```
+
+Summary stats
+
+```{r}
+sum_stats <- dat %>% 
+  summarise_all(.funs = mean)
+sum_stats$per_ag
+sum_stats$per_gc
+```
+
+Thinking through how to normalize the pile so that one constant can be applied to piled material.
+
+Read in the ag/gc coefficients. Take mean and multiply by percent in above ground class. Add percent in ground contact class times coefficient of 1, since there is no penalty to ground material.
+
+```{r}
+agGc <- read.csv("ag_gc_coefficient.csv")
+
+coEf <- agGc %>% 
+  filter(ref. == 'Mean') %>% 
+  select(ag.gc) %>% 
+  unlist()
+
+sum_stats
+```
+
+Function for weighted average of piled coefficients
+```{r}
+piled_k_const <- function(k_const, coEf = 0.721, per_ag = .892, per_gc = .108) {
+  
+  k_pile <- ((k_const * coEf) * per_ag) + (k_const * per_gc)
+  
+  return(k_pile)
+}
+
+piled_k_const(.09)
+```
+
+
+
+```{r}
+# This is not correct. I want to do a weighted average approach to the piled coefficient
+sum_stats %>% 
+  transmute(wt_ag = per_ag * coEf,
+            wt_gc = per_gc * 1,
+            wt_coef = wt_ag + wt_gc)
+```
+

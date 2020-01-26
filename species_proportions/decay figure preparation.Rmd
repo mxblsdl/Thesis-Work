@@ -1,0 +1,186 @@
+---
+Title: "Decay Figure"
+Date: "7/2/2019"
+---
+
+# Purpose: Create Decay Figure for Display
+Decay figure will show variaition on decay rates through climate for the ten most prominent species in CA
+
+Load libraries
+```{r message=FALSE}
+options(scipen = 10)
+library(raster)
+library(tidyverse)
+```
+
+Species proportions csv used to determine which species to use for graph
+
+```{r}
+proportions <- read.csv("species_props.csv", stringsAsFactors = F)
+
+spec <- read_csv("../ResidualTreeLists/csv/Species.csv", col_types = cols()) %>%
+  dplyr::select(c(PlantsCode, FVSCode)) %>%
+  rename(Spp = FVSCode)
+
+proportions <- left_join(proportions, spec)
+```
+
+# load rasters of decay values for identified species
+
+```{r}
+# get names of species
+names <- proportions[1:10,] %>% 
+  dplyr::select(PlantsCode) %>% 
+  t() %>% # transpose
+  c() # concatenate
+
+# get all raster locations
+rasters <- dir("E:/rasterSpecies/temp_rast_cwd_V3", pattern = ".tif$", full.names = T)
+
+# subset to rasters of interest
+rasters <- lapply(rasters, function(x) {
+  str_subset(x, pattern = names)
+})
+
+# remove empty paths
+rasters <- rasters[lapply(rasters, length) > 0]
+```
+
+# Load rasters and convert to data.frames
+This step may take a long time
+```{r}
+# define as.data.frame to remove NA values
+r.data.frame <- function(x) {
+  r <- as.data.frame(x, na.rm = T) %>% 
+    mutate(species = names(.)) # add species name identifier
+  return(r)
+}
+
+rasters <- lapply(rasters, raster)
+
+# call each raster and convert to a data.frame
+# may take a really long time
+r_list <- lapply(rasters, r.data.frame)
+
+rbind_list(r_list) %>% 
+  saveRDS("rasterValues.RDS")
+```
+
+# inspect output
+Output may be too large. 
+Data is in wrong format and needs to be cleaned up by removing NA values
+Read in data, clean, and write out as indivual dataframes to join later on
+
+```{r}
+names <- names %>% str_subset("PSME|ABCO",negate = T)
+
+for (i in 1:length(names)) {
+  data <- readRDS("rasterValues.RDS") %>% 
+    filter(species == names[i]) %>% 
+    select(species, everything())
+  
+  data <- data[,colSums(is.na(data)) == 0] %>% 
+    rename(value = 2)
+    
+  paste(data[1,1])
+  
+  saveRDS(data, paste0("decay_by_species/", data[1,1], ".RDS"))
+}
+```
+
+
+# Load final data
+Get all data frames and join into one long df
+
+```{r}
+dfs <- dir("decay_by_species", full.names = T)
+
+dfs <- lapply(dfs, read_rds)
+
+dfs <- bind_rows(dfs)
+
+#saveRDS(dfs, "rasterValuesAll.RDS")
+```
+
+# plotting
+
+Subset data for plot construction
+
+```{r}
+dfs <- read_rds("rasterValuesAll.rds")
+
+# take random sample for quicker iterations in constructin plots 
+# dfs <- dfs[sample(nrow(dfs), 3000, replace = F), ]
+
+# clear gc() to free memory
+gc()
+gc()
+```
+
+Prepare data
+
+```{r}
+# arrange by species
+dfs <- dfs %>% arrange(species)
+
+# add class distinction
+dfs <- dfs %>% 
+  mutate(class = case_when(species == "QUKE" ~ "Angiosperm",
+                           species == "QUCH2" ~ "Angiosperm",
+                           TRUE ~ "Gymnosperm"))
+
+
+# add names to df to make more readable
+dfs <- left_join(dfs, proportions %>% select(PlantsCode, name), by = c("species" = "PlantsCode"))
+
+# drop species column for space
+dfs <- dfs %>% 
+  select(-species)
+
+# reorder by factor to match % prominence
+dfs$name <- factor(dfs$name, levels = c("Douglas-fir",
+                                        "Ponderosa Pine", 
+                                        "White Fir", 
+                                        "Incense Cedar", 
+                                        "Jeffrey Pine",
+                                        "California Black Oak",
+                                        "California Red Fir",
+                                        "Sugar Pine",
+                                        "Canyon Live Oak",
+                                        "Grand Fir"), ordered = T)
+dfs %>% head()
+gc()
+```
+
+*consider* Taking a sample of the data as the whole dataset is too large and not a lot may be gained from looking at everything as opposed to a smaple
+
+Plotting
+
+```{r}
+ggplot(dfs) +
+  geom_boxplot(aes(name, value, fill = class)) +
+  theme_minimal() +
+  labs(y = "Decay Values",
+       x = "Species",
+       fill = "Class") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+
+consider using a groub_by_all %>% count to determine hwo many rows I could possibly remove by using some type of factor. I have lots of duplicate rows, but I want to retain the same ratio of unique values. 
+
+```{r}
+memory.limit()
+
+t <- dfs %>% group_by_all() %>% count()
+
+gc()
+t %>% arrange(name)
+
+
+t$n %>% sum()
+
+ggplot(t) +
+  geom_boxplot(aes(name, value))
+```
+

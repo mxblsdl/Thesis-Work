@@ -1,0 +1,96 @@
+---
+title: "turnover_time"
+author: "Max Blasdel"
+date: "April 26, 2019"
+output: html_document
+---
+# Purpose
+Process decay rate rasters to display turnover times
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Load relavent packages
+```{r}
+library(raster)
+```
+
+Load data
+```{r}
+ras <- dir("../../outputs/rasters/", pattern = ".tif$", full.names = T)
+ras_name <- dir("../../outputs/rasters/", pattern = ".tif$", full.names = F)
+#ras_name <- tools::file_path_sans_ext(ras_name)
+```
+
+
+$$N_{t}=N_{o} * exp^{(-k*t)}$$
+where
+
+$$.5 = exp^{(-k*t)}$$
+where
+
+$$ln(.5)=-k*t$$
+
+$$\frac{ln(.5)}{-k} = t$$
+where k is know and is the values of the rasters
+
+Function will create a temporary raster. Create a folder for this raster to go into to keep track of these temp files.
+```{r}
+for (i in 1:length(ras)) {
+  raster <- raster(ras[i])
+  #creates unique filepath for temp directory
+  dir.create (file.path("temp"), showWarnings = FALSE)
+  
+  #sets temp directory
+  rasterOptions(tmpdir=file.path("temp")) 
+  
+  time <- -log(.05)/raster # set for t95
+  
+  writeRaster(time, paste0("time/t95_", ras_name[i]))
+  
+  unlink("temp", recursive = T)
+}
+```
+
+Reference simplistic approach to decay given a constant k value across sites
+
+Come back to this and work on a bit more
+```{r}
+df <- data.frame(
+  "t50_cwd" = -log(0.5)/0.05,
+  "t95_cwd"  = -log(0.05)/0.05,
+  "t50_fwd"  = -log(0.5)/0.09,
+  "t95_fwd"  = -log(0.05)/0.09
+)
+
+# Check 
+1*exp(-0.05 * seq(1,60,1))
+```
+
+
+# advanced plotting in R, mayby not worth the time
+```{r}
+library(rgdal)
+library(rasterVis)
+library(RColorBrewer)
+```
+
+```{r}
+colr <- colorRampPalette(brewer.pal(11, 'RdYlBu'))
+
+levelplot(cwd_time, 
+          margin=FALSE,                       # suppress marginal graphics
+          colorkey=list(
+            space='bottom',                   # plot legend at bottom
+            labels=list(at=0:100, font=4)      # legend ticks and labels 
+          ),    
+          par.settings=list(
+            axis.line=list(col='transparent') # suppress axes and legend outline
+          ),
+          scales=list(draw=FALSE),            # suppress axis labels
+          col.regions=colr,                   # colour ramp
+          at=seq(0, 100, len=101))             # colour ramp breaks
+  #layer(sp.polygons(oregon, lwd=3))           # add oregon SPDF with latticeExtra::layer
+```
+

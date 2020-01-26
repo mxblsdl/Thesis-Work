@@ -1,0 +1,171 @@
+---
+title: "Deriving missing values for CWD and FWD"
+date: "February 25, 2019"
+---
+# Recreate script to derive missing values known CWD and FWD
+
+# Perform regression analysis to relate decay of CWD to FWD for all species
+```{r message=FALSE}
+library(tidyverse)
+library(magrittr)
+```
+
+linear regression equation
+```{r}
+lm_eqn <- function(df){
+    m <- lm(y ~ x, df)
+    eq <- substitute(italic(y) == a + b %.% italic(x)*","~~italic(r)^2~"="~r2, 
+         list(a = format(coef(m)[1], digits = 3),
+              b = format(coef(m)[2], digits = 3),
+             r2 = format(summary(m)$r.squared, digits = 3)))
+    as.character(as.expression(eq))
+}
+```
+
+```{r}
+lm_eqn_noR <- function(df){
+    m <- lm(y ~ x, df)
+    eq <- substitute(italic(y) == a + b %.% italic(x),
+         list(a = format(coef(m)[1], digits = 3),
+              b = format(coef(m)[2], digits = 3)))
+#             r2 = format(summary(m)$r.squared, digits = 3)))
+    as.character(as.expression(eq))
+}
+```
+
+```{r}
+dat <- read.csv("../csv/mean.species.k.csv", stringsAsFactors = F)
+```
+
+Plot out points
+```{r}
+plot(dat$CWD, dat$FWD)
+```
+
+Create df for equation to be displayed
+```{r}
+df <- dat %>% 
+  rename(x = CWD,
+         y = FWD)
+```
+
+
+Perform regression equation
+```{r}
+lm <- lm(FWD ~ CWD, data = dat)
+summary(lm)
+```
+
+Plotting points with GGplot and with climate normalized values
+```{r}
+dat %>% 
+  ggplot() +
+  theme_minimal() +
+  geom_point(aes( x = CWD, y = FWD)) +
+  geom_abline(slope = lm$coefficients[2], intercept = lm$coefficients[1]) +
+  scale_x_continuous(limits = c(0, .2)) +
+  geom_text(x = .15, y = .35, label = lm_eqn_noR(df), parse = TRUE) +
+  labs(y = "FWD K Constant", x = "CWD K Constant")
+```
+Output graph
+```{r}
+ggsave("../images/regression.png", dpi = 300)
+```
+
+
+
+
+Applying derived values equation
+$$y=0.0393 + 1.2535x$$
+Correlation tests
+```{r}
+cor.test(dat$CWD, dat$FWD, method = "pearson")
+```
+
+
+To derive FWD values 
+```{r}
+dat %<>% 
+  mutate(der.FWD = 0.0393 + CWD*1.2535,
+         der.CWD = (FWD-0.0393)/1.2535)
+
+dat
+```
+
+Replace occurences of NA with derived value
+```{r}
+dat %<>% 
+  mutate(CWD = coalesce(CWD, der.CWD),
+         FWD = coalesce(FWD, der.FWD))
+
+```
+
+Write out for later use.
+```{r}
+write.csv(dat, "../csv/mean.species.k.Wderived.csv")
+```
+
+
+
+
+# Perform regression on recalculated values without climate attached
+
+```{r}
+library(readxl)
+```
+
+```{r}
+dat <- read_xlsx("../../climate modifier/data/Reorganized_species_database_with_climate.xlsx")
+```
+
+```{r}
+# splits data frame based on size class
+groups <- dat %>% 
+  mutate(class = case_when(fuel_class == "twigs" | fuel_class == "branch" | fuel_class == "large branch" ~ "FWD",
+                           fuel_class == "log" | fuel_class == "large log" ~ "CWD",
+                           TRUE ~ "Other")) %>% 
+  select(class, k_const, genus, species) %>% 
+  mutate(species = paste(genus, species, sep = "_")) %>% 
+  select(-genus) %>% 
+  group_split(class)
+  
+dats <- dat %>% 
+  mutate(class = case_when(fuel_class == "twigs" | fuel_class == "branch" | fuel_class == "large branch" ~ "FWD",
+                           fuel_class == "log" | fuel_class == "large log" ~ "CWD",
+                           TRUE ~ "Other"),
+         species = paste(genus, species, sep = "_")) %>% 
+  select(class, k_const, species) %>% 
+  group_by(species, class) %>% 
+  mutate(k_const_mean = mean(k_const)) %>% 
+  select(-k_const) %>% 
+  distinct() %>% 
+  spread(key = class, value = k_const_mean, fill = NA) # coerce into long format
+```
+
+Prepare data for regression
+```{r}
+# for lm equations
+df <- dats %>% 
+  rename(x = CWD,
+         y = FWD)
+
+lm <- lm(FWD ~ CWD, data = dats)
+```
+
+plot similar to above
+```{r}
+dats %>% 
+  ggplot() +
+  theme_minimal() +
+  geom_point(aes( x = CWD, y = FWD)) +
+  geom_abline(slope = lm$coefficients[2], intercept = lm$coefficients[1]) +
+  scale_x_continuous(limits = c(0, .2)) +
+  geom_text(x = .15, y = .35, label = lm_eqn_noR(df), parse = TRUE) +
+  labs(y = "FWD K Constant", x = "CWD K Constant")
+```
+Similar results to non-augmented data regression
+
+```{r}
+summary(lm)
+```
+

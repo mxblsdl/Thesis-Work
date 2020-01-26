@@ -1,0 +1,269 @@
+---
+title: "Decay Implementation"
+date: "November 5, 2018"
+output:
+  pdf_document: default
+  html_document: default
+  word_document: default
+---
+This is an augmented version of a script from Micah implementing decay.
+Needs to address issue of movement of foliage to duff and incorporation of piled values.
+
+```{r setup, include=FALSE}
+knitr::opts_knit$set(root.dir = "../")
+```
+
+# Purpose
+
+This document calculates decay over time by size class for harvest and treatment residues. 
+
+# Setup
+
+Load the necessary packages and set ggplot2 theme.
+
+```{r message=FALSE, warning=FALSE}
+library(data.table)
+library(parallel)
+library(ggplot2)
+library(tidyverse)
+
+theme_set(theme_classic() + 
+                  theme(panel.grid.major = element_line(color = "grey90",
+                                                        size = 0.2),
+                        strip.background = element_blank()))
+```
+
+# Residue 
+
+First, load the treatment raster attribute data, processed in UW_treatments.Rmd.
+
+```{r}
+Residue_by_treat <- fread("data/Residue_by_treat.csv")
+```
+
+The residue data set is really big because it contains the resdiue values for each FCID and treatment, including the no action treatment. To make developement easier, select a treatment and filter the residue to just that treatment. Additionally, select the first 1,000 FCID, and filter out the rest. **NOTE: This will need to be undone for any final runs.**
+
+```{r}
+Residue_by_treat <- Residue_by_treat[Treatment == "RM100"]
+
+Residue_by_treat <- Residue_by_treat[c(1:100),]
+```
+
+Load the weighted K values, one for each FCID number. Filter the k values to only include FCIDs that are in the subset of the residue data. Grab only the columns of interest and rename them. *NOTE: Updated with piled materials* **NOTE: updated with non-weighted decay values**
+
+```{r}
+decay <- fread("../ResidualTreeLists/decay_FCID_with_climate.csv")
+
+decay <- decay[FCID %in% Residue_by_treat$FCID2018]
+
+decay[is.na(decay)]<-0
+
+decay<-decay[, .(FCID2018 = FCID, # I drop species here and I don't think I need it.
+            Species = Species,
+            Proportion = proportion,
+            Foliage = foliage,
+            Fine = FWD,
+            Coarse = CWD,
+            Pile_Foliage = piled_foliage,
+            Pile_Fine = piled_FWD,
+            Pile_Coarse = piled_CWD,
+            climate = climate)]
+```
+
+
+```{r}
+# weighted_decay <- fread("csv/weighted_FCID.csv") 
+# 
+# weighted_decay <- weighted_decay[FCID2018 %in% Residue_by_treat$FCID2018]
+# 
+# weighted_decay <- weighted_decay[, .(FCID2018 = FCID2018, 
+#                                      Foliage = Weighted_K_foliage,
+#                                      Fine = Weighted_K_FWD,
+#                                      Coarse = Weighted_K_CWD,
+#                                      Pile_Foliage = piled_foliage,
+#                                      Pile_Fine = piled_FWD,
+#                                      Pile_Coarse = piled_CWD)]
+```
+
+Join the k values to the residue data.
+```{r}
+# This creates multiple entries for each FCID that has multiple species. Amounts will need to be scaled to reflect proportions by species
+Residue_by_treat <- merge(Residue_by_treat, decay, by = "FCID2018")
+```
+
+Create a simple negative exponential decay function.
+
+```{r}
+decay_fun <- function(residue, k_val, t) {
+        return(residue * exp(-k_val * t))
+}
+```
+
+Split the table into a list based on FCID.**12/10**
+No issues with multiple entries per FCID. Calculate new amounts of residues based on species abundence of FCID.
+```{r}
+residue_list <- split(Residue_by_treat, Residue_by_treat$FCID2018)
+
+residue_list <- lapply(residue_list, function(x) x  %>% # Calculates new abundance based on proportions
+    mutate(Pulp_6t9_tonsAcre = Pulp_6t9_tonsAcre*Proportion) %>% 
+    mutate(Break_6t9_tonsAcre = Break_6t9_tonsAcre*Proportion) %>% 
+    mutate(Pulp_4t6_tonsAcre = Pulp_4t6_tonsAcre*Proportion) %>% 
+    mutate(Break_4t6_tonsAcre = Break_4t6_tonsAcre*Proportion) %>% 
+    mutate(Break_ge9_tonsAcre = Break_ge9_tonsAcre*Proportion) %>% 
+    mutate(Branch_tonsAcre = Branch_tonsAcre*Proportion) %>% 
+    mutate(Foliage_tonsAcre = Foliage_tonsAcre*Proportion) %>% 
+    mutate(Break_4t9_tonsAcre = Break_4t9_tonsAcre*Proportion) %>%
+    mutate(Pulp_4t9_tonsAcre = Pulp_4t9_tonsAcre*Proportion))
+
+# residue_list <- residue_list %>% replace_na(0)
+```
+
+Max Version
+Probably not the fastest, but it works and calculates foliage movement to duff at 50% mass.
+Need to run with for non-piled and for piled. Wait until I have climate section done as well. 
+
+```{r}
+doDecay <- function(list) {
+  test_out <- list()
+  for (i in 1:101) { # years 1 through 100
+  test_out[[i]] <- unique(list %>% 
+    transmute(FCID2018 = FCID2018,
+            Treatment = Treatment,
+            Year = i-1,
+            
+            Foliage_time_T = if(sum(decay_fun(Foliage_tonsAcre, Foliage, i-1)) < sum(list$Foliage_tonsAcre*0.5)){ # check for 50% duff
+             0# this only sets foliage to zero, need to move to duff
+            } else{
+              sum(decay_fun(Foliage_tonsAcre, Foliage, i-1))
+            }, # Applies exp. decay and sums the results
+           
+            Branch_time_T = sum(decay_fun(Branch_tonsAcre, Fine, i-1)),
+            Pulp4t9_time_T = sum(decay_fun(Pulp_4t9_tonsAcre, Coarse, i-1)),
+            Break_4t9_time_T = sum(decay_fun(Break_4t6_tonsAcre, Coarse, i-1)),
+            Break_ge9_time_T = sum(decay_fun(Break_ge9_tonsAcre, Coarse, i-1))
+            # I want to calculate the duff from the decay loss each year.
+            ))
+  }
+ 
+  test_out<-do.call(rbind, test_out)
+  test_out$annual_duff = 0 # set the initial duff amount to 0
+  # removing the pulp4t9 and break4t9 columns since these were doubled up on the residues
+  test_out$annual_duff[2:101] = abs(rowSums(test_out[ ,c('Foliage_time_T', 'Branch_time_T', 'Pulp4t9_time_T', 'Break_ge9_time_T')]) %>% diff()*0.02) # calculate annual inputs of duff from decaying material
+
+for (j in 1:100) { # loop to add one time amount of duff from foliage
+  if (test_out$Branch_time_T %>% sum() == 0){ # test for 0 rows which cause problems
+    break
+  if (test_out$Foliage_time_T[j] == 0){
+    x<-test_out$Foliage_time_T[j-1]
+    test_out$annual_duff[j]<-test_out$annual_duff[j]+x # add the duff, only happens once
+    break
+   }
+  }   
+}
+  test_out$Duff_time_T<-cumsum(decay_fun(test_out$annual_duff, .002, test_out$Year)) # decay the duff and calculate cumulative totals
+    return(test_out)
+}
+
+# looping the above function for all residue list items. 
+allDecay<-list()
+system.time(
+for (i in 1:length(residue_list)) {
+ allDecay[[i]]<-doDecay(residue_list[[i]])  
+}
+)
+```
+
+Bind into one file
+```{r}
+allDecay <- do.call(rbind, allDecay)
+
+
+```
+
+
+
+Micah function. I find it confusing and it broke for some reason.
+```{r}
+start<-Sys.time()
+decay_list <- lapply(residue_list, 
+                       #mc.cores = detectCores() - 1,
+                       function(x){
+        out_l <- lapply(seq(1, 100), function(i) {
+                # decay each size class
+         # orig_mass = x$Foliage_tonsAcre
+               decay_i <- x[, .(FCID2018 = FCID2018,
+                                Treatment = Treatment,
+                                Year = i,
+                                Foliage_tonsAcre = decay_fun(Foliage_tonsAcre,
+                                                             Foliage, 
+                                                             i),
+                                Branch_tonsAcre = decay_fun(Branch_tonsAcre,
+                                                            Fine,
+                                                            i),
+                                Pulp_4t9_tonsAcre = decay_fun(Pulp_4t9_tonsAcre,
+                                                              Coarse,
+                                                              i),
+                                Break_4t9_tonsAcre = decay_fun(Break_4t6_tonsAcre,
+                                                               Coarse,
+                                                               i),
+                                Break_ge9_tonsAcre = decay_fun(Break_ge9_tonsAcre,
+                                                               Coarse,
+                                                               i))]
+               # calculate duff addition from each year
+               decay_i$Annual_Duff_tonsAcre <- rowSums(decay_i[, c("Foliage_tonsAcre",
+                                                                   "Branch_tonsAcre",
+                                                                   "Pulp_4t9_tonsAcre",
+                                                                   "Break_4t9_tonsAcre",
+                                                                   "Break_ge9_tonsAcre")]) * 0.02
+                                               
+                                               return(decay_i)
+                
+        })
+        
+        out_df <- do.call("rbind", out_l)
+        
+        # decaying the duff at 0.002 percent a year
+        # Does not need to be altered
+        out_df$Duff_tonsAcre <- decay_fun(cumsum(out_df$Annual_Duff_tonsAcre),
+                                          0.002,
+                                          out_df$Year)
+        
+        # save the output after removing old version
+                # file.remove(paste0("data/UW/decayed/decayed_residue_",
+                #               x,
+                #               ".csv")
+                # fwrite(decay_i,
+                #        paste0("data/UW/decayed/decayed_residue_",
+                #               x,
+                #               ".csv"))
+        
+        return(out_df)
+})
+end<-Sys.time()
+end-start
+```
+Just for reference the above function took about 13.5 hours to run.
+
+Merge the decay data into a single data table.
+
+```{r}
+decay <- do.call("rbind", decay_list)
+```
+
+Plot some of the output. I randomly selected a FCID.
+
+```{r fig.height=5, fig.width=6}
+ggplot(decay[FCID2018 == 102951281], aes(Year, Duff_tonsAcre)) +
+        geom_line()
+
+ggplot(decay[FCID2018 == 102951281], aes(Year, Annual_Duff_tonsAcre)) +
+        geom_line()
+
+ggplot(decay[FCID2018 == 102951281], aes(Year, Branch_tonsAcre)) +
+        geom_line()
+
+ggplot(decay[FCID2018 == 102951281], aes(Year, Foliage_tonsAcre)) +
+        geom_line()
+```
+
+

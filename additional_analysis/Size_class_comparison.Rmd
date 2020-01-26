@@ -1,0 +1,199 @@
+---
+title: "Decay by Size Class"
+author: "Max Blasdel"
+date: "September 27, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+require(data.table)
+require(tidyverse)
+require(kableExtra)
+```
+
+
+This is a quick comparison of decay by size class. The size classes are defined by fire fuel loading class of 1, 10, 100, 1000, and 1000 hour fuels. I went through the decay database that I created and classified each reported decay value into one of these categories by the stated diameter of the woody material that was being studied. 
+This document will show that creating a distinction between size classes as they relate to fuel classes is not supported by the data, but creating a distinction between FWD and CWD is justifiable.
+
+```{r include=FALSE}
+#knitr::kable(
+dt<-data.table(
+  "Residue Size Class (in.)" =
+  c("Foliage",
+                                 "Branches",
+                                 "Branches",
+                                 "Branches",
+                                 "4-6",
+                                 "6-9",
+                                 "9+",
+                                 "9+"),
+  "Surface Fuel Size (in.)" = c("Litter",
+                                      "<=0.25",
+                                      "0.26-1",
+                                      "1.1-3",
+                                      "3.1-9",
+                                      "3.1-9",
+                                      "9.1-20",
+                                      ">20"),
+                            "Surface Fuel Size (cm.)" = c("Litter",
+                                                                "<=0.64",
+                                                                "0.65-2.54",
+                                                                "2.55-7.62",
+                                                                "7.63-22.86",
+                                                                "7.63-22.86",
+                                                                "22.87-50.8",
+                                                                ">50.8"),
+                            "Fuel Hour Class" = c("NA",
+                                                       "1-hr",
+                                                       "10-hr", 
+                                                       "100-hr", 
+                                                       "1,000-hr",
+                                                       "1,000-hr",
+                                                       "10,000-hr",
+                                                       ">10,000-hr"),
+                        "Fuel Class" = c("Foliage",
+                                                     "twigs",
+                                                     "branches",
+                                                     "large branches",
+                                                     "logs",
+                                                     "logs",
+                                                     "large logs",
+                                                     "large logs"))
+
+knitr::kable(dt) %>%
+  kable_styling(bootstrap_options = "striped", font_size = 19)
+dt
+```
+
+
+```{r}
+species.db<-read.csv("../data/Reorganized_species_database.csv", stringsAsFactors = F)%>% 
+  select(c(K.constant, Genus, Species, Size.Class..cm., Notes, Classification, Fuel.Class))%>%
+  rename(size.class = Size.Class..cm.)
+head(species.db)
+```
+
+Looking at the comparison between the fire fuel classes. I included bark and snags just because they were classifications in some of the literature that I collected.
+```{r}
+species.fuel.class<- species.db %>%
+  select(-c(Species,Notes, size.class)) %>%
+  group_by(Fuel.Class) %>%
+  transmute(k.fuel.class = mean(K.constant)) %>%
+  distinct()
+knitr::kable(head(species.fuel.class,9))
+```
+
+```{r}
+means<-species.db %>%
+  filter(Fuel.Class != "") %>% 
+  filter(Fuel.Class !="bark") %>%
+  filter(Fuel.Class !="snag") %>%
+  filter(Fuel.Class !="foliage") %>%
+  group_by(Fuel.Class) %>%
+  summarise_at(vars(K.constant) , funs(median(.)))
+
+species.db %>%
+  filter(Fuel.Class != "") %>% 
+  filter(Fuel.Class !="bark") %>%
+  filter(Fuel.Class !="snag") %>%
+  filter(Fuel.Class !="foliage") %>%
+ggplot(aes(x=Fuel.Class, y=K.constant))+
+  geom_boxplot()+
+    labs(x="Fuel Class", y="Decay Constant")+
+  geom_text(data = means, aes(x=Fuel.Class, y=K.constant, label=round(K.constant,3)),
+            size=3, vjust=-.5)
+
+```
+
+
+```{r}
+ggsave("../size class comparison/all_sizes.png", dpi = 300)
+```
+
+Here is a value for snags as they decay. Just a note that in the literature there were a few negative decay values, meaning the density or mass was shown to increase after the first year. This is unexplained and may be due to methodology errors. Also, snags are really hard to measure as far as mass loss due to their position. These values are all from one study and if you seperate out the beech trees from the rest the mean decay value really drops.
+```{r}
+species.db %>%
+  filter(Fuel.Class =="snag")
+# This number will most likely be used for the snag decay. I think we can assume that the majority of snags are conifers
+snag_gym <- species.db %>%
+  filter(Fuel.Class == "snag") %>%
+  filter(Classification == "Gymnosperm") %>%
+  summarise(Snag_gym = mean(K.constant))
+  
+snag_ang <- species.db %>%
+  filter(Fuel.Class == "snag") %>%
+  filter(Classification == "Angiosperm") %>%
+  summarise(Snag_ang = mean(K.constant))
+
+snags <- data.frame(
+  "Snags_gym" = snag_gym,
+  "Snags_ang" = snag_ang)
+
+snags
+# fwrite(snags, "../csv/snag_decay.csv")
+```
+
+I want to look at the difference between FWD and CWD. We will define FWD as being less than 7.6 cm diameter.
+```{r}
+FWD<-species.db %>%
+  filter(Fuel.Class=="twigs" | Fuel.Class=="branch" | Fuel.Class=="large branch") %>%
+  mutate(class.k = mean(K.constant)) %>%
+  mutate(Class = "FWD")
+  
+CWD<-species.db %>%
+  filter(Fuel.Class == "log" | Fuel.Class == "large log") %>%
+  mutate(class.k = mean(K.constant)) %>%
+  mutate(Class = "CWD")
+```
+
+
+Plotting the data for FWD versus CWD and remomving the litter and snag values
+```{r include=TRUE}
+means<-rbind(CWD, FWD) %>%
+  filter(Fuel.Class != "") %>% 
+  filter(Fuel.Class !="bark") %>%
+  filter(Fuel.Class !="snag") %>%
+  filter(Fuel.Class !="foliage") %>%
+  group_by(Class) %>%
+  summarise_at(vars(K.constant) , funs(median(.)))
+
+
+rbind(FWD,CWD) %>%
+  ggplot(aes(x=Class, y=K.constant))+
+  geom_boxplot()+
+  labs(x="Fuel Class", y="Decay Constant")+
+  geom_text(data = means, aes(x=Class, y=K.constant, label= round(K.constant,4)),
+            size=3, vjust=-.5)
+```
+
+```{r}
+ggsave("../size class comparison/fwd_cwd.png", dpi = 300)
+```
+
+
+Exploring some of the outliers
+```{r}
+species.db %>%
+  filter(K.constant < .2) %>%
+  filter(Fuel.Class != "") %>% 
+  filter(Fuel.Class !="bark") %>%
+  filter(Fuel.Class !="snag") %>%
+  filter(Fuel.Class !="foliage") %>%
+ggplot(aes(x=Fuel.Class, y=K.constant))+
+  geom_boxplot()+
+    labs(x="Fuel Class", y="Decay Constant")
+
+
+outliers<-species.db %>%
+  filter(Fuel.Class != "") %>% 
+  filter(Fuel.Class !="bark") %>%
+  filter(Fuel.Class !="snag") %>%
+  filter(Fuel.Class !="foliage") %>%
+  filter(K.constant>.2)
+outliers
+
+```

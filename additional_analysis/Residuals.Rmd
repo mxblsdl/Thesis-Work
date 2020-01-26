@@ -1,0 +1,275 @@
+---
+title: "Residual Tree List"
+author: "Max Blasdel"
+date: "Fenruary 25, 2019"
+output: html_document
+---
+# update for climate modifier values
+
+Script for reading in the residual tree list from NRSIG, calculating proportional abundance, dealing with missing values and other data miscommunications, and finally calculating weighted K values.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r message=FALSE}
+require(foreign)
+require(tidyverse)
+require(data.table)
+require(ggplot2)
+```
+
+Using the remove NA scenario to establish the species composition of the modeled data
+```{r}
+res <- readRDS("../data/rmna") %>% 
+  dplyr::select(-c(OBJECTID, TrtId, LCR, MCW))
+head(res)
+```
+
+Read in the residual tree list and parse it down to proportional DBH grouped by FCID.
+```{r}
+res<-res %>%
+  group_by(FCID2018, Spp) %>%
+  #group_by(Spp) %>%
+  summarise(sumDBH = sum(DBH)) %>%
+  ungroup() %>%
+  group_by(FCID2018) %>%
+  mutate(proportion = sumDBH/sum(sumDBH))
+```
+
+Compare to GNN data
+```{r}
+# decay_db<-fread("../Residues Base/csv/full_database_decay.csv") %>%
+#   select(Species, GNN_ID, FCID, Prop_Basal_Area)
+# 
+# decay_db %>% 
+#   filter(is.na(Species))
+```
+
+The two lists are very similar, but they are different. The GNN list is more detailed than NRSIG. I know I should use the NRSIG list for this analysis. I'm worried that will mess up the climate portion a bit.
+
+
+Read in the species data from UW to get at the GNN codes used to designate species as opposed to the two letter FVS code. The species.csv comes straight from UW but was edited by me to remove double two character codes.
+*1/15/19*
+There were two species missing from the species.xlsx file that appeared in the residual tree list dbh.
+These were SH and BK or shagbark hickory and black locust. I went into the csv and added these with their occumpanying species codes. 
+```{r}
+spec<-fread("../data/Species.csv") %>%
+  dplyr::select(c(PlantsCode, FVSCode, CommonName, ScientificName)) %>%
+  rename(Spp = FVSCode)
+
+res<-left_join(res, spec, by="Spp")
+res<-res %>% 
+  rename(Species = PlantsCode)
+```
+
+There are issues joining these data sets since the species codes are used more than once in the Species document. This is most apparent in the OH category as the others are all listed out. Can go in and fix this.*Edit* Went into the excel and got rid of duplicate entries for FVS codes. This involved removing some of the duplicate Acer entries. It mostly involved condensing all of the 'other species' into one category. This was all uncommon hardwood species that did were considered other in the GNN version of this analysis.
+
+Now I want to try joining the decay values to the UW res data set. 
+```{r}
+decay.values <- fread("../data/mean_species_k_wDerived.csv", stringsAsFactors = F) %>%
+  select(-c(V1, der.FWD, der.CWD))
+
+# Aggregate genus and species into one item, useful later on
+decay.values<-decay.values %>%
+  mutate(Group = paste(genus,species)) %>%
+  select(-c(genus, species))
+
+decay.values <- decay.values %>%
+  mutate(Group = replace(Group, Group=="Other hardwood Spp.", "Other hardwood")) %>%
+  mutate(Group = replace(Group, Group=="Other Softwood Spp.", "Other softwood"))
+
+tail(decay.values)
+```
+
+*Comes from relating rmd, only change is input of UW file instead of GNN*
+Join the species groupings list and the mean decay values and then join with the FCID list. Inspect the results for any NA values.
+```{r}
+Species_list <- fread("../data/Updated_species_groupings.csv", stringsAsFactors = FALSE)
+
+head(Species_list)
+
+mean_decay_GNN_species<-merge(decay.values,Species_list)
+
+joined_FCID<- left_join(res, mean_decay_GNN_species, by = "Species") 
+
+joined_FCID %>%
+  ungroup() %>% 
+  filter(is.na(genus_mean)) %>% 
+  select(ScientificName) %>% unique()
+```
+
+There are missing values for White fir, Red fir and other. This is due to some disagreement with how UW and GNN classify some species. This is very minor (ie. noble fir and red fir being classed seperately in UW while they are together in GNN. These two species are very similiar and mostly distinguished by location). *Again following an updated version of relating script*
+
+```{r}
+NoTally<-joined_FCID %>% 
+        filter(is.na(k_foliage) | is.na(genus_mean))
+unique(NoTally$CommonName)
+
+joined_FCID<-anti_join(joined_FCID,NoTally)
+
+NoTally %>%
+  select(CommonName, Species) %>%
+  distinct()
+```
+
+Identify the species that do not have values and add them in based on the decay database. Bind together.
+```{r}
+mean_decay_GNN_species
+
+red_fir<-decay.values %>%
+  filter(Group=="Abies magnifica") %>%
+  mutate(Species = "ABCO")
+
+white_fir<-decay.values %>%
+  filter(Group=="Abies concolor") %>%
+  mutate(Species = "ABMA")
+  
+oak<-decay.values %>%
+  filter(Group=="Quercus spp.") %>%
+  mutate(Species = "QUEM")
+
+other<-decay.values %>%
+  filter(Group=="Other hardwood") %>%
+  mutate(Species = "2TB")
+
+populus<-decay.values %>%
+  filter(Group=="Populus spp.") %>%
+  mutate(Species = "POAN3")
+
+indiv<-rbind(red_fir, white_fir, oak, other, populus)
+```
+
+Adding the values in to the res dataframe.
+```{r}
+setDT(NoTally)  
+setDT(indiv)
+
+NoTally[indiv, on = "Species", c("genus_mean", "classification", "CWD", "FWD", "k_foliage", "Group"):= 
+          list(i.genus_mean, i.classification, i.CWD, i.FWD, i.k_foliage, i.Group)]
+NoTally[indiv, on = "Species", Scientific.Name := i.Group]
+
+NoTally<-data.frame(NoTally) # Need to make sure these are dfs being rbind or error
+joined_FCID<-data.frame(joined_FCID) # same same
+
+joined_data <- as.data.frame(rbind(joined_FCID, NoTally))
+```
+
+# Calculate new means per species
+
+I think I can break with the workflow here can calculate some mean values
+```{r}
+joined_data %>%
+  select(Species, CWD, FWD) %>%
+  distinct() %>%
+  arrange(Species) %>%
+  write.csv("../data/speciesCode_kValues.csv")
+joined_data
+```
+
+
+
+# beyond not used for climate workflow
+Reads in the UW_GNN crosswalk dataset and pulls out all of the FCID numbers that do not agree between the two. These are all numbers and associated raster cells that have no DomSpp and no biomass resources on them. 
+```{r}
+UW_GNN<-read.csv("../Residues Base/data/Final_GNN_FCID_2.csv", stringsAsFactors = F) %>%
+  dplyr::select(FCID2018, FCID, DomSpp, RepFCID201) %>%
+  rename(GNN_ID = FCID) 
+
+missing_FCID<-anti_join(UW_GNN, joined_data)
+missing_FCID<-data.frame(missing_FCID[,1])
+
+t<-paste(missing_FCID, ",") # This can be used in ArcMap to select no value pixel cells.
+# str_replace_all(t, "[\r\n]" , "")
+```
+
+This method leaves out some FCID numbers that do not have any residues on them. I do need to add these FCID numbers into the df for later reference. Need to add these into the dataframe.
+```{r}
+for (i in 2:14) {
+  missing_FCID[,i]<-NA
+}
+colnames(missing_FCID)<-colnames(joined_data)
+
+joined_data<-rbind(joined_data, missing_FCID)
+```
+
+**Exploring the below calculations for algebra errors based on conversation wtih Jerome 12/6/18**
+*These numbers are different need to look into how to expand equations*
+# if the weighted values are wrong based on these proportions I can just keep the proportions and species tag on the decay values as they are.
+
+This was for checking for a missing species value from earlier on.
+```{r}
+joined_data %>% 
+  filter(Species == 'ROPS')
+```
+
+# For weighted values, moving away from this.
+
+Calculating the weighted K for the CWD, FWD, and the for the foliage component. Bind the resultant data together
+```{r}
+Weighted_K_CWD <- joined_data %>% 
+        group_by(FCID2018) %>%
+        transmute(Weighted_K_CWD = sum(proportion * CWD, na.rm = TRUE)) %>%
+        ungroup()
+
+Weighted_K_FWD<-joined_data %>%
+        group_by(FCID2018) %>%
+        transmute(Weighted_K_FWD = sum(proportion * FWD, na.rm = T)) %>%
+        ungroup()
+
+Weighted_K_foliage <- joined_data %>%
+        group_by(FCID2018) %>%
+        transmute(Weighted_K_foliage = sum(proportion * as.numeric(k.foliage), na.rm = T)) %>%
+        ungroup()
+
+weighted_values<-inner_join(Weighted_K_CWD, Weighted_K_FWD, by="FCID2018") %>%
+        inner_join(Weighted_K_foliage) %>%
+        distinct()
+```
+
+
+Look at some of the results in ggplot. 
+```{r}
+weighted_values %>%
+  ggplot(aes(Weighted_K_CWD)) +
+  geom_histogram(bins = 40) 
+weighted_values %>%
+  ggplot(aes(Weighted_K_FWD)) +
+  geom_histogram(bins = 40)
+```
+
+Writing out the whole database for use later. Also writing out the weighted K 
+```{r}
+fwrite(joined_data, "../outputs/tabular/full_database_decay.csv")
+
+fwrite(weighted_values, "../outputs/tabular/weighted_k_FCID.csv")
+```
+
+
+
+
+# Check for residues in cells marked with no decay values
+
+This was to examine if there are any residues on the rm100 raster that show biomass resources for the FCID values show to have no data from this analysis. 
+```{r}
+rm100<-read.dbf("../Residues Base/Treatment dbfs/RM100.dbf")
+df<-fread("full_database_decay.csv")
+
+rm100<-rm100 %>%
+  rename(FCID2018 = Value)
+anti_join(rm100, df)
+
+# This shows that the missing values from the residual tree list holds no biomass.
+anti_join(rm100, res)
+  summarise_all(funs(sum))
+
+gnn<-fread("../Residues Base/data/Final_GNN_FCID_2.csv")
+
+# more reassurance that no residues values add up
+t<-anti_join(gnn, res) 
+unique(t$DomSpp)
+```
+
+
+

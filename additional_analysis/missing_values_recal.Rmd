@@ -1,0 +1,97 @@
+---
+author: "Max Blasdel"
+date: "Fenruary 24, 2019"
+title: "Deriving missing values for FWD and CWD"
+---
+
+# Purpose
+Create derived values for CWD and FWD from mean genus values with recalulated climate agnostic values
+
+```{r}
+library(tidyverse)
+```
+
+load data
+```{r}
+dat <- read.csv("../data/mean.species.k.csv")
+```
+
+```{r}
+plot(dat$CWD, dat$FWD)
+```
+
+Applying derived values equation
+$$y=0.0393 + 1.2535x$$
+There is an issue here as SESE CWD becomes negative with this approach
+```{r}
+dat %<>% 
+  mutate(der.FWD = 0.0393 + CWD*1.2535,
+         der.CWD = (FWD-0.0393)/1.2535)
+```
+
+```{r}
+dat %<>% 
+  mutate(CWD = coalesce(CWD, der.CWD),
+         FWD = coalesce(FWD, der.FWD))
+dat %>% filter(genus == "Tsuga")
+```
+
+write out for later use
+```{r}
+write.csv(dat, "../data/mean_species_k_wDerived.csv")
+```
+
+
+
+
+
+
+
+
+
+
+
+Produces really good r values since there is modeled data in the regression
+```{r}
+lin_model <- lm(FWD ~ CWD, data = dat)
+summary(lin_model)
+
+{plot(dat$CWD, dat$FWD)
+abline(lin_model)}
+```
+
+
+# old
+
+Essentially the correlation test is giving poor results when comparing the recalculated values. I might just use the same equation that is in the framework document. I do have to recreate this script since it disappeared somehow. 
+```{r}
+cor(dat$CWD, dat$FWD, method = c("pearson", "kendall", "spearman"))
+
+cor.test(dat$CWD, dat$FWD, method = "kendall")
+cor.test(dat$CWD, dat$FWD, method = "pearson")
+cor.test(dat$CWD, dat$FWD, method = "spearman")
+
+dat_no_que <- dat[-3,] 
+
+lin_model <- lm(FWD ~ CWD, data = dat_no_que)
+summary(lin_model)
+
+
+{plot(dat_no_que$CWD, dat_no_que$FWD)
+abline(lin_model)}
+```
+
+removing na values and making sure only the CWD/FWD values are plotted against each other
+```{r}
+d <- dat_no_que %>% 
+  na.omit()
+
+lin_model <- lm(FWD ~ CWD, data = d)
+summary(lin_model)
+
+{plot(d$CWD, d$FWD)
+abline(lin_model)}
+
+cor.test(d$CWD, d$FWD, method = "pearson")
+```
+

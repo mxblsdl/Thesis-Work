@@ -1,0 +1,191 @@
+---
+title: "Pile Size"
+author: "Max Blasdel"
+date: "September 27, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Reference paper can be found here.
+```{r}
+browseURL("https://nararenewables.org/publications/")
+```
+
+Read in the data from Miller and Boston This data comes directly from the Boston paper and has no calculations done to it yet.
+```{r}
+pile_data<-read.csv("boston.csv", stringsAsFactors=F)
+head(pile_data)
+```
+
+The gross pile volume is the size of the piles. The solid wood pile volume is the gross volume times a packing ratio of 0.2. This is done to account for space between debris. The packing ratio number comes from Hardy 1996?, it is a common number that is used in pile estimation. Solid wood volume can be converted back to gross pile volume by multiplying by a factor of $\frac{1}{.2}$.
+```{r}
+pile_data$gross.pile.volume..m3.*.2
+pile_data$solid.wood.pile.volume..m3.
+```
+
+
+I need to determine the average size of the pile and what that pile would weight to determine how much of the residues would be allocated to each pile. 
+```{r}
+pile_volume<-mean(pile_data$solid.wood.pile.volume..m3.)
+```
+
+The average gross pile volume in cubic meters
+```{r}
+pile_volume_gross_mean<-mean(pile_data$gross.pile.volume..m3.)
+pile_volume_gross<-pile_data$gross.pile.volume..m3.
+```
+
+*may replace with Hardy numbers*
+Read in data from Harmon paper on dead wood density
+```{r}
+browseURL("https://www.nrs.fs.fed.us/pubs/38699")
+
+dead_wood<-read.csv("Harmon_sd_dd.csv")
+head(dead_wood)
+```
+
+
+Average the downed wood $grams/cm^3$ column and convert to meters cubed. This could be changed to focus on specific species as opposed to finding a mean. Hardy 1999 also has density values by species. It may be better to go with Hardy since those are FS numbers. 
+```{r}
+dead_wood_weight<-mean(na.omit(dead_wood$DD..g.cm3.))
+
+cubic_cm_per_cubic_m<-1000000
+gram_kilogram<-1000
+
+dead_wood_weight_kg_m3<-dead_wood_weight*cubic_cm_per_cubic_m/gram_kilogram
+```
+*Weight not important*
+
+Pile volume per pile
+```{r}
+volume_per_pile<-pile_data$gross.pile.volume..m3./pile_data$Pile.Count
+```
+
+
+The average foot print per pile will give the base measurement assuming a paraboloid shape.
+```{r}
+ha_per_pile<-pile_data$pile.area..ha./pile_data$Pile.Count
+```
+
+
+Convert this number to meters then to a circle shape
+```{r}
+sq_meters_per_ha<-10000
+
+sq_meters_pile<-ha_per_pile*sq_meters_per_ha
+```
+
+
+If these are circular piles then the formula $$A=pi*r^2$$ would describe the total area of the base as A. Solving for the radius as $$r=\sqrt{A/pi}$$
+```{r}
+pile_radius<-sqrt(sq_meters_pile/pi)
+pile_width<-pile_radius*2
+```
+
+
+The paraboloid distinction comes from Hardy 1999, a paper on pile emissions.
+```{r}
+browseURL("https://depts.washington.edu/nwfire/piles/support/pile_documentation.php")
+```
+
+
+```{r, fig.retina=NULL, out.width=100, echo=FALSE}
+knitr::include_graphics("paraboloid.png")
+```
+
+
+Using the above figure as a representation of a paraboloid, we have W and the total gross volume. The equation $$V=(pi*H*W^2)/8$$ describes the volume of the paraboloid. 
+Solving for H as $$H=(V*8)/(pi*W^2)$$
+```{r}
+pile_height<-(volume_per_pile*8)/(pi*pile_width^2)
+pile_height
+mean(pile_height)
+
+as.data.frame(pile_height)
+```
+
+
+A math check
+```{r}
+pi*pile_height*pile_width^2/8
+volume_per_pile
+```
+
+
+Given the assumption that material that is within 1 foot of the forest floor can be considered in contact with the ground we would calculate a second parabola with equation $$V=(pi*(H-0.305)*W^2)/8$$. The difference between the parabolas will describe the material considered in contact and the second parabola will describe the material that is above ground.
+```{r}
+mean(volume_per_pile)
+mean(pile_height)
+
+ground_contact<-mean(volume_per_pile)-(pi*(mean(pile_height)-0.305)*mean(pile_width^2/8))
+```
+
+
+
+```{r}
+library(data.table)
+volume_table<-data.table("Pile Volume" = mean(volume_per_pile),
+                         "Pile Height" = mean(pile_height),
+                         "Above Ground Material" = mean(volume_per_pile)-mean(ground_contact),
+                         "Ground Contact Material" = mean(ground_contact),
+                         "Percent Aboveground" = ((mean(volume_per_pile)-mean(ground_contact))/mean(volume_per_pile))*100,
+                         "Percent Ground Contact" = (mean(ground_contact)/mean(volume_per_pile))*100)
+volume_table
+```
+
+Testing how relationship changes with the assumption of height from ground
+```{r}
+gc_height_vals <- seq(.1, 1, 0.1)
+values <- data.frame()
+
+for (i in 1:length(gc_height_vals)) {
+  ground_contact <- (pi*pile_height*pile_width^2/8)-(pi*(pile_height-gc_height_vals[i])*pile_width^2/8)
+  values[i,1] <- (mean(volume_per_pile) - mean(ground_contact)) / mean(volume_per_pile)*100
+  values[i,2] <- mean(ground_contact)/mean(volume_per_pile) * 100
+}
+
+values$dist <- gc_height_vals
+
+colnames(values) <- c("AG %", "GC %", "Distance From Ground (m)")
+values
+```
+
+
+Plotting how this relationship changes with varying heights. We will assume a direct proportion between height and width.
+```{r}
+mean(pile_height/pile_width)
+mean(pile_width/pile_height)
+
+heights<-seq(.5,7,0.1)
+widths<-heights*mean(pile_width/pile_height)
+
+regression<-lm(pile_width~pile_height)
+
+{plot(pile_height, pile_width)
+abline(pile_width, pile_height)}
+summary(regression)
+
+widths<-regression$coefficients[1]+heights*regression$coefficients[2]
+plot(widths, heights)
+
+
+plot((pi*heights*widths^2/8)-(pi*(heights-0.305)*widths^2/8))
+```
+
+
+From this data the mean pile height is roughly 10 feet tall. The high value is about 18 feet tall. Regardless we can calculate how much each of these piles weights in lbs through some conversions. I will use the solid wood pile volume to calculate the total weight in tons. This is equivalent to using a compaction factor of 0.2 on the gross volume. 
+```{r}
+kilo_to_pounds<-2.205
+lbs_ton<-2000
+
+pile_weight<-pile_data$solid.wood.pile.volume..m3.*dead_wood_weight_kg_m3*kilo_to_pounds/lbs_ton
+```
+
+
+So given the equation for a paraboloid above how would I calculate the volume of material that is say a foot off the ground. Essentially cutting a plane through the paraboloid at 1 foot above the ground and calculating the different volumes?
+
+
+

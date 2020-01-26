@@ -1,0 +1,104 @@
+---
+title: "comparing piled material decay over time"
+date: "April 22, 2019"
+author: "Max Blasdel"
+---
+
+# Purpose 
+Compare different methods of quantifying pile decay
+
+```{r}
+library(tidyverse)
+library(magrittr)
+```
+
+```{r setup, include=FALSE}
+options(scipen = 20)
+```
+
+# Create some data
+
+Constants
+```{r}
+# decay value
+k_val <- 0.05
+
+# proportions of material
+pro_ag <- .892
+pro_gc <- .108
+
+# piled coefficient applied to ag material
+piled_coeff <- 0.721
+
+# initial pile load
+pile <- 10
+
+# time
+years <- seq(1,100)
+```
+
+Weighted average piled approach function
+```{r}
+piled_k_const <- function(k_const, coEf = piled_coeff, per_ag = pro_ag, per_gc = pro_gc) {
+  
+  k_pile <- ((k_const * coEf) * per_ag) + (k_const * per_gc)
+  
+  return(k_pile)
+}
+```
+
+Create df of values
+```{r}
+df <- data.frame(
+  "single_pool" =  pile * exp(-piled_k_const(k_val) * years), # single pool 
+  "ag" =  pile * pro_ag * exp(-k_val * piled_coeff * years), # AG
+  "gc" =  pile * pro_gc * exp(-k_val * years) # GC
+  #"sum_ag_gc" = sum(ag, gc)
+  #"per_diff" = single_pool - sum_ag_gc
+)
+```
+
+Calculate more values for df
+
+```{r}
+df %<>% 
+  mutate(sum_ag_gc = ag + gc,
+         per_diff = 100 * abs(single_pool - sum_ag_gc) / single_pool[1])
+df %<>% 
+  mutate(single_pool_per = single_pool/pile,
+         sum_per = sum_ag_gc/pile)
+```
+
+# Plot values
+
+Close up of difference
+```{r}
+ggplot(df) +
+  theme_minimal(base_size = 16) +
+  geom_line(aes(years, single_pool_per, color = "green"), size = 2) + 
+  geom_line(aes(years, sum_per, color = "red"), size = 2) + 
+  scale_color_discrete(name = "Methods", labels = c("Weighted Average", "Separate Classes")) +
+  scale_x_continuous(limits = c(40, 50)) +
+  scale_y_continuous(limits = c(.15, .24)) +
+  labs(y = "Material Remaining (%)", x = "Years") +
+  theme(legend.position = "bottom")
+```
+save output
+```{r}
+ggsave("images/comparison_piles.png", dpi = 300)
+```
+
+Show how percent difference changes over time
+```{r}
+ggplot(df) +
+  theme_minimal(base_size = 16) +
+  geom_line(aes(years, per_diff), color = "#6699ff", size = 2) +
+  labs(x = "Years", y = "Difference (%)")
+```
+
+save output
+```{r}
+ggsave("images/percent_diff.png", dpi = 300)
+```
+
+

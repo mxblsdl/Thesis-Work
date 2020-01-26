@@ -1,0 +1,148 @@
+---
+title: "Alternate Climate Equations"
+date: " January 29, 2019"
+author: "Max Blasdel"
+---
+
+# Purpose
+Prepare data for Adair 2008 model and Smith 2011 model
+
+```{r message=FALSE}
+library(ncdf4)
+library(dplyr)
+library(data.table)
+```
+
+
+Adair 2008
+Note the temp equation is the from Lloyd and Taylor
+Equations will be run in other script
+```{r}
+FW_Adair <- function(PPT ,PET) {
+ return(1/(1 + 30 * exp((-8.5 * (PPT/PET)))))
+}
+FT_Adair <- function(Temp) {
+return(exp(308.56 * ((1/56.02)-(1/((273.15 + Temp)-227.13)))))
+}
+```
+
+Smith et al. 2011
+```{r}
+Climate_Smith <- function(PPT, Temp_July) {
+  (PPT/1000)^0.5 * 1*exp(-66500/8.31 * ((1/Temp_July) - (1/15)))
+}
+smith_simple <- function(AET) {
+  AET/1620
+}
+```
+
+Read in data for Adair model from nc files
+
+First pull in latlon grid
+```{r}
+nc_list <- dir(path = "../../../../../gridMET Data/pet", pattern = "*\\.nc$", full.names = T)
+nc<-nc_open(nc_list[1], verbose = F)
+lon <- ncvar_get(nc, "lon")
+lat <- ncvar_get(nc, "lat")
+lonlat<-expand.grid(lon, lat)
+rm(nc,lon,lat)
+gc()
+```
+
+Relevent functions
+```{r}
+get_nc_variable<-function(nc_file, dname, fun){
+  nc <- nc_open(nc_file, verbose = F) # open the nc file
+  ncArray<-ncvar_get(nc, dname) # get values for variable of interest 
+  array_yearly<-apply(ncArray, c(1,2), fun) # apply fun for entire year, apply in matrix
+  yearly.vec <- as.vector(array_yearly) # put as vector
+  df <- data.frame(yearly.vec) # put as dataframe
+}
+```
+
+Variables changed
+```{r}
+# PET
+dname <- "potential_evapotranspiration"
+variable_path <- "pet"
+
+# PPT
+dname <- "precipitation_amount" # Need variable name
+variable_path <- "pr"
+```
+
+# Change above variables
+```{r}
+nc_list <- dir(path = paste("../../../../../gridMET Data/", variable_path, sep=""), pattern = "*\\.nc$", full.names = T)
+
+pet_list <- list()
+for (i in 1:length(nc_list)) {
+  pet_list[[i]]<-get_nc_variable(nc_list[i], dname = dname, fun = sum)
+}
+  # bind together
+pet_list <- do.call(cbind, pet_list)
+#columns need unique names to average together
+colnames(pet_list) <- seq(2007, 2017, 1) #change when more yeasrs downloaded
+# Take average of all years
+TenYrAve <-pet_list %>%
+  transmute(TenYrAverage = rowMeans(.)) %>%
+  cbind(lonlat, .) %>%
+  as.data.table()
+TenYrAve
+```
+
+```{r}
+saveRDS(TenYrAve, paste("../../ncFiles/Processed Data/", variable_path, sep = ""))
+```
+
+Dealing with temperature. I think I want to look at how the min and max were averaged together. I averaged entire min and max for ten(eleven) years and then averaged the two. Want to average each year.
+```{r}
+dname <- "air_temperature"
+variable_path <- "Tmin"
+```
+
+Run for Min values first
+Then run for Max
+```{r}
+nc_list <- dir(path = paste("../../../../../gridMET Data/", variable_path, sep=""), pattern = "*\\.nc$", full.names = T)
+var_list <- list()
+for (i in 1:length(nc_list)) {
+  var_list[[i]]<-get_nc_variable(nc_list[i], dname = dname, fun = mean)
+}
+min<-do.call(cbind,var_list)
+
+# Change path name, variable stays the same
+variable_path <- "Tmax"
+
+nc_list <- dir(path = paste("../../../../../gridMET Data/", variable_path, sep=""), pattern = "*\\.nc$", full.names = T)
+var_list <- list()
+for (i in 1:length(nc_list)) {
+  var_list[[i]]<-get_nc_variable(nc_list[i], dname = dname, fun = mean)
+}
+max<-do.call(cbind,var_list)
+```
+
+End up with two dfs for each variable. Want average per year or per column
+```{r}
+Tmean <- list()
+for (i in 1:ncol(max)) {
+  Tmean[[i]] <- ((min[,i] + max[,i]) / 2)
+}
+Tmean <- do.call(cbind, Tmean)
+
+Tmean <- as.data.frame(Tmean)
+colnames(Tmean) <- seq(2007, 2017, 1)
+Tmean %<>%
+  transmute(TenYrAverage = rowMeans(.)) %>%
+  cbind(lonlat, .) %>%
+  as.data.table()
+
+# Convert to celcius from Kelvin
+Tmean$TenYrAverage <- Tmean$TenYrAverage - 273.15
+```
+
+```{r}
+saveRDS(Tmean, "../../ncFiles/Processed Data/Tmean")
+```
+
+Climate models run in climate_mod_adair.rmd

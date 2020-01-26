@@ -1,0 +1,118 @@
+---
+title: "Deriving missing values for CWD and FWD"
+date: "February 25, 2019"
+---
+# Recreate script to derive missing values known CWD and FWD
+```{r message=FALSE}
+library(tidyverse)
+library(magrittr)
+
+# show regression equation
+lm_eqn <- function(df, x, y){
+    m <- lm(y ~ x, df);
+    eq <- substitute(italic(y) == a + b %.% italic(x), 
+         list(a = format(unname(coef(m)[1]), digits = 3),
+              b = format(unname(coef(m)[2]), digits = 3)#,
+              #r2 = format(summary(m)$r.squared, digits = 3)
+              )
+         )
+    as.character(as.expression(eq));
+}
+```
+
+```{r}
+dat <- read.csv("../csv/mean.species.k.csv", stringsAsFactors = F)
+dat %>%
+  head()
+```
+
+Plot out points
+
+```{r}
+# get regression equation to display
+eq_display <-
+  lm_eqn(dat, dat$CWD, dat$FWD)
+
+g <-
+  dat %>%
+  ggplot() +
+  theme_minimal() +
+  geom_point(aes(CWD, FWD, shape = Classification)) +
+  geom_smooth(aes(CWD, FWD), method = "lm", fullrange = F) +
+  theme(legend.position = "bottom",
+        text = element_text(size = 16)) +
+  labs(color = "Taxa") +
+  scale_x_continuous(limits = c(0,.18)) +
+  scale_shape(solid = F)
+
+g + geom_text(x = .04, y = .35, label = eq_display, parse = T)
+```
+
+Output graph
+
+```{r}
+ggsave("../images/correlation_analysis_shp.png", plot = last_plot(), dpi = 500)
+```
+
+
+Perform regression equation
+
+```{r}
+lm <- lm(FWD ~ CWD, data = dat)
+
+lm$coefficients
+```
+
+Applying derived values equation
+$$y=0.0393 + 1.2535x$$
+Plot residuals
+
+```{r}
+RColorBrewer::brewer.pal.info
+cols <-
+  RColorBrewer::brewer.pal(n = 2, "PuOr")
+
+ggplot() +
+  theme_minimal() +
+  theme(text = element_text(size = 14)) +
+  geom_histogram(aes(lm$residuals),
+                 col = "white",
+                 fill = "grey50",
+                 binwidth = 0.01) +
+  labs(x = "Residuals",
+       y = "Count")
+```
+
+```{r}
+ggsave("../images/residuals.png", dpi = 500)
+```
+
+Correlation tests
+
+```{r}
+cor.test(dat$CWD, dat$FWD, method = "pearson")
+```
+
+
+To derive FWD values 
+```{r}
+dat %<>% 
+  mutate(der.FWD = 0.0393 + CWD*1.2535,
+         der.CWD = (FWD-0.0393)/1.2535)
+
+dat
+```
+
+Replace occurences of NA with derived value
+```{r}
+dat %<>% 
+  mutate(CWD = coalesce(CWD, der.CWD),
+         FWD = coalesce(FWD, der.FWD))
+
+```
+
+Write out for later use.
+```{r}
+write.csv(dat, "../csv/mean.species.k.Wderived.csv")
+```
+

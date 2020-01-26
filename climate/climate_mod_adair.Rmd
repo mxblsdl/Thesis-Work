@@ -1,0 +1,226 @@
+---
+title: "Climate Mod Adair and Smith"
+date: "January 29, 2019"
+author: "Max Blasdel"
+---
+*update 3/8/2019*
+# Implement alternative temperature equations and create masked version of the climate modifier.
+
+Implement climate models and clip to California. 
+
+Need to confirm projection of data before clipping and writing out
+
+```{r message=FALSE}
+library(raster)
+library(dplyr)
+library(rgdal)
+library(magrittr)
+library(sf)
+library(rgeos)
+```
+
+Climate equations to use
+Adair functions
+```{r}
+# From Adair
+FW_Adair <- function(PPT ,PET) {
+
+  return(1 / (1 + 30 * exp((-8.5 * (PPT / PET)))))
+
+}
+
+FT_Adair <- function(Temp) {
+
+  return(exp(308.56 * ((1 / 56.02) - (1 / ((273.15 + Temp) - 227.13)))))
+
+}
+```
+
+Q10 equations
+```{r}
+FT_Q10 <- function(Temp, Q10) {
+  return(Q10^((Temp-10)/10))
+}
+```
+
+Smith - DONT USE - AET is a different metric than PET
+```{r}
+# # From Smith 2011
+# Climate_Smith <- function(PPT, Temp_July) {
+#   (PPT/1000)^0.5 * 1*exp(-66500/8.31 * ((1/Temp_July) - (1/15)))
+# }
+# Smith_simple <- function(AET) {
+#   AET/1620
+# }
+```
+
+Cropping functions
+```{r}
+# crop and mask function
+cropAndMask <- function(raster, shp) {
+  r <- crop(raster, shp)
+  r <- mask(r, shp)
+  return(r)
+}
+```
+
+Read in data
+```{r}
+pet <- readRDS("../../../GRIDMET/ncFiles/pet")
+pr <- readRDS("../../../GRIDMET/ncFiles/pr")
+temp <- readRDS("../../../GRIDMET/ncFiles/Tmean")
+#summary.data.frame(temp)
+# another temp data file exists but it reports data in celcius not kelvin
+#temp <- readRDS("../../../GRIDMET/ncFiles/Tmean_df")
+```
+
+Read in California shapefile to clip
+
+```{r}
+# Cali <- readOGR("../../data/California", layer = "CA_State_TIGER2016")
+# 
+# Cali <- spTransform(Cali, CRSobj = '+proj=longlat +datum=WGS84 +no_defs')
+
+# gBuffer(Cali)
+# 
+Cali <- read_sf("../../data/California")
+
+Cali <- st_transform(Cali, crs = 4326)
+
+# apply buffer to shapefile to reduce data loss
+
+Cali <- st_buffer(Cali, dist = 1)
+
+Cali <- as(Cali, "Spatial")
+
+plot(Cali)
+```
+
+Simple Smith models
+
+```{r}
+# #isolate the coordinates
+# lonlat <- pet[,1:2]
+# lonlat$TenYrAverage <- Smith_simple(pet$TenYrAverage)
+# 
+# # Convert data to raster format
+# smith_rast <- raster::rasterFromXYZ(lonlat, crs ="+proj=longlat +datum=WGS84 +ellps=WGS84 +towgs84=0,0,0")
+# smith_rast <- projectRaster(from = smith_rast, crs = coordinate_ref)
+# 
+# # Crop and mask
+# smith_rast <- cropAndMask(raster = smith_rast, shp = Cali)
+# 
+# plot(smith_rast)
+```
+
+Adair model moisture
+
+```{r}
+lonlat <- pet[,1:2]
+
+lonlat$climate <- FW_Adair(PPT = pr$TenYrAverage, PET = pet$TenYrAverage)
+
+adair_fw <- raster::rasterFromXYZ(lonlat, crs ="+proj=longlat +datum=WGS84 +no_defs")
+
+#adair_fw <- projectRaster(from = adair_fw, crs = coordinate_ref)
+
+adair_fw <- cropAndMask(raster = adair_fw, shp = Cali)
+
+#plot(adair_fw)
+```
+
+Adair temperature
+
+```{r}
+lonlat <- pet[,1:2]
+lonlat$climate <- FT_Adair(Temp = temp$TenYrAverage)
+adair_ft <- raster::rasterFromXYZ(lonlat, crs ="+proj=longlat +datum=WGS84 +no_defs")
+#adair_ft <- projectRaster(from = adair_ft, crs = coordinate_ref)
+adair_ft <- cropAndMask(raster = adair_ft, shp = Cali)
+
+#plot(adair_ft)
+```
+
+Multiply together
+
+```{r}
+adair_climate <- adair_ft * adair_fw
+```
+
+Filter map to show areas of neutral change
+```{r}
+# useValues sets values outside clamp range to NA
+mostly_neutral <- clamp(adair_climate, lower = .9, upper = 1.1, useValues = F)
+
+# inspect
+plot(mostly_neutral)
+
+# output plot
+# finish in GIS software
+writeRaster(mostly_neutral, "../../climate_mod/mostly_neut.tif")
+```
+
+
+# write out 
+# V2 was a rerun done in late June with the buffered shapefile of CA. The equation was also tweaked, changing 273.15 to 273. This slightly alters the values of the final output. After a successful run, correct clipping, this is being rerun as V3 with the 273.15 value. 
+
+```{r}
+writeRaster(adair_climate, "../../climate_mod/adair_V3.tif", overwrite = T)
+```
+
+
+# Below should be the same as above
+Note the Adiar moisture function will stay the same
+
+```{r}
+lonlat <- pet[,1:2]
+lonlat$moist <- FW_Adair(PPT = pr$TenYrAverage, PET = pet$TenYrAverage)
+lonlat$temp <- FT_Adair(Temp = temp$TenYrAverage)
+
+lonlat %<>% 
+  mutate(climate = temp*moist)
+
+lonlat <- lonlat[,c(1,2,5)]
+climate_raster <- rasterFromXYZ(lonlat, crs = '+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0')
+
+climate_raster <- cropAndMask(climate_raster, Cali)
+
+climate_raster
+```
+
+Produces slightly different values, probably some rounding error from when the clips happen? Does not look to be significantly different. 
+
+Assuming above is correct, right out for later use.
+
+```{r}
+#writeRaster(climate_raster, "climate_adair.tif", overwrite = T)
+```
+
+
+
+```{r}
+# create folder for rasters to test Q10 values
+dir.create("Sensitivity")
+
+vals <- seq(1.4, 2, .2)
+for (i in vals) {
+# extract x/y coordinates from a climate layer
+lonlat <- pet[,1:2]
+# run equation
+lonlat$climate <- FT_Q10(Q10= i, Temp = temp$TenYrAverage)
+# transform to raster, project and crop to cali
+temp_rast <- raster::rasterFromXYZ(lonlat, crs ="+proj=longlat +datum=WGS84 +ellps=WGS84 +towgs84=0,0,0")
+temp_rast <- projectRaster(from = temp_rast, crs = coordinate_ref)
+temp_rast <- cropAndMask(raster = temp_rast, shp = Cali)
+
+cli <- temp_rast * adair_fw
+writeRaster(cli, filename = paste0("Sensitivity/Q10", i, ".tif"))
+}
+```
+
+
+
+
+
+
+

@@ -1,0 +1,200 @@
+---
+title: "Mean Decay Values"
+author: "Max Blasdel"
+date: "February 23, 2019"
+output: html_document
+---
+# Purpose
+Read in reorganized species database with climate information and produce mean values based on species/genus
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This document will be used to call the species database, perform some data wrangling, calculate k values for foliage based on angiosperma/gymnosperm distinctions, create distinctions between fine and coarse wood, and add Other hard and softwood values.
+
+Load the desired packages.
+```{r include=FALSE, message=FALSE}
+library(readxl)
+library(tidyverse)
+library(magrittr)
+```
+
+Read in the original species database and inspect.
+```{r}
+species.db <- read_xlsx("../data/Reorganized_species_database_with_climate.xlsx")
+
+# species.db<-read.csv("../data/Reorganized_species_database.csv", stringsAsFactors = F)%>% 
+#   select(c(K.constant, Genus, Species, Size.Class..cm., Notes, Classification, Fuel.Class))%>%
+#   rename(size.class = Size.Class..cm.)
+head(species.db)
+```
+
+Writing out simple table of genus counts
+```{r}
+#count<-species.db %>%
+ # count(genus)
+#count
+#write.table(count, file = "../data/count.txt")
+```
+
+I want to calculate affect of species regardless of foliage, but foliage is also a fuel size class. I also want to look at differences between angiosperm and gymnosperm foliage.
+This method creates three objects I don't need. This could be better done with a split and mutate
+```{r}
+foliage.gym<- species.db %>%
+  filter(fuel_class == "foliage", classification == "Gymnosperm") %>%
+  mutate(k_foliage = mean(recal_val, na.rm = T)) %>%
+  select(classification, k_foliage) %>%
+  distinct()
+
+foliage.ang<- species.db %>%
+  filter(fuel_class == "foliage", classification == "Angiosperm") %>%
+  mutate(k_foliage = mean(k_const, na.rm = T)) %>%
+  select(classification, k_foliage) %>%
+  distinct()
+
+foliage<-rbind(foliage.ang, foliage.gym)
+
+species.db<-inner_join(species.db, foliage, by="classification")
+head(species.db)
+
+rm(foliage.ang, foliage.gym)
+gc()
+```
+
+
+I might want to remove the foliage and snag data before going forward. These values will throw off the overall genus means that will be calculated. 
+```{r}
+species.db %<>%
+  filter(fuel_class != "snag") %>%  
+  filter(fuel_class!= "foliage") %>% 
+  filter(fuel_class!= "bark")
+```
+
+Address piled materials in this workflow
+```{r}
+# df <- data.frame(cwd_all= species.db %>% 
+#   filter(genus == "Psuedotsuga") %>% 
+#   filter(class == "CWD") %>% 
+#   transmute(k = mean(recal_val, na.rm = T)) %>% distinct(),
+# fwd_all =species.db %>% 
+#   filter(genus == "Psuedotsuga") %>% 
+#   filter(class == "FWD") %>% 
+#   transmute(k = mean(recal_val, na.rm = T)) %>% distinct()
+# )
+# df
+# remove suspended
+species.db %<>% 
+  filter(!notes %in% c("elevated", "suspended", "aerial"))
+
+# df2 <- data.frame(cwd_all= species.db %>% 
+#   filter(genus == "Psuedotsuga") %>% 
+#   filter(class == "CWD") %>% 
+#   transmute(k = mean(recal_val, na.rm = T)) %>% distinct(),
+# fwd_all =species.db %>% 
+#   filter(genus == "Psuedotsuga") %>% 
+#   filter(class == "FWD") %>% 
+#   transmute(k = mean(recal_val, na.rm = T)) %>% distinct()
+# )
+# cbind(df, df2)
+```
+Doesn't really have a big influence on doug-fir
+
+Make the distinction between CWD and FWD by seperating the data sets based on Fuel Class.
+*case_when* being super useful right now
+```{r}
+species.db %<>% 
+  mutate(class = case_when(fuel_class == "log" ~ "CWD",
+                          fuel_class == "large log" ~ "CWD",
+                          fuel_class == "twigs" ~ "FWD",
+                          fuel_class == "branch" ~ "FWD",
+                          fuel_class == "large branch" ~ "FWD"))
+```
+
+The Yatskov values get really big when back applying the climate equations, this is because of the very low temperatures in those regions. It appears that these are throwing off the values. 
+```{r}
+species.db %<>% 
+  filter(ref != "Yatskov et al. 2003")
+```
+
+Calculate mean k values for genus species and FWD,CWD distinction
+Uses updated climate agnostic values
+*some of the recalval are NA. Do I throw these values out or just use the values with climate information?*
+I'm thinking I throw them out.
+
+```{r}
+# calculate CWD and FWD values for each species
+fine_coarse<-species.db %>%
+  group_by(genus, species, class) %>%
+  summarise(mean.k = mean(recal_val, na.rm = T)) %>% 
+  ungroup() %>% 
+  spread(key = class, mean.k, convert = T)
+
+####HERE
+# This gives me the genus mean
+genus_mean<-species.db %>%
+  group_by(genus) %>%
+  transmute(genus_mean = mean(recal_val, na.rm = T)) %>%
+  ungroup() %>% 
+  distinct()
+
+
+# Adds genus, classification, and foliage value to fine_coarse
+fine_coarse<-species.db %>%
+  select(genus, classification, k_foliage) %>%
+  right_join(fine_coarse, by="genus") %>%
+  distinct()
+
+fine_coarse
+genus_mean
+```
+
+
+Joining the datasets together
+```{r}
+species.db.update<-left_join(genus_mean,fine_coarse, by="genus")
+species.db.update
+```
+
+
+I want to create values for other hardwood and other softwood. I will use the angiosperm and gymnosperm distinctions here. 
+```{r}
+ang.gym.mean.values<-species.db %>%
+  group_by(classification) %>%
+  summarise(genus_mean = mean(recal_val, na.rm = T)) %>%
+  select(-one_of("classification")) %>%
+  mutate(genus=c("Other hardwood", "Other Softwood")) %>%
+  mutate(species= "Spp.")
+
+# add in foliage values
+ang.gym.mean.values<-cbind(ang.gym.mean.values, foliage)
+
+# calculate CWD and FWD values basedon classification 
+ang.gym.mean.values <- species.db.update %>% 
+  group_by(classification) %>% 
+  transmute(CWD = mean(CWD, na.rm = T),
+            FWD = mean(FWD, na.rm = T)) %>% 
+  distinct() %>% 
+  left_join(ang.gym.mean.values, by="classification")
+
+ang.gym.mean.values
+```
+
+```{r}
+plot(species.db.update$CWD, species.db.update$FWD)
+```
+
+
+
+
+Linking the dataframes without the species specific information
+```{r}
+mean.values.all<-rbind.data.frame(species.db.update, ang.gym.mean.values)
+```
+
+
+Writing out the mean decay values by species for later use.
+```{r}
+write.csv(mean.values.all, file = "../data/mean.species.k.csv", row.names = F)
+```
+

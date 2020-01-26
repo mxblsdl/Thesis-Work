@@ -1,0 +1,33 @@
+---
+title: "Explore Decay Database"
+Date: "June 3, 2019"
+---
+# Purpose
+Load decay database and perfrom some simple summary stats
+
+Load packages
+Final database is an Excel workbook
+```{r message=FALSE}
+library(tidyverse)
+library(readxl)
+```
+
+Load data
+```{r}
+readxl::excel_sheets("../../climate modifier/data/Reorganized_species_database_with_climate.xlsx")
+
+data <- readxl::read_xlsx("../../climate modifier/data/Reorganized_species_database_with_climate.xlsx")
+data %>% head()
+```
+
+
+```{r}
+data %>%
+  filter(genus == "Psuedotsuga")
+
+
+data %>% 
+  group_by(species) %>% 
+  count(sort = T)
+```
+

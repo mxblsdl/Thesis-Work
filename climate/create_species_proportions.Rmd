@@ -1,0 +1,161 @@
+---
+title: "Climate By Species"
+author: "Max Blasdel"
+date: "2/12/2019"
+---
+# Purpose
+Implement new approach to climate modifier. 
+I want to start by deratifying the UW raster based on species. 
+I'll try exporting these as individual rasters as opposed to csv files.
+
+Load packages
+```{r message=FALSE}
+library(raster)
+library(dplyr)
+library(tidyr)
+library(magrittr)
+library(data.table)
+```
+
+
+I want to start by loading a raster of just FCID values and joining species distribution data.
+
+*I think what happened is that when writing out the FCID values only some get copied over and there was a signicant portion that were lost. This is why there was no ABAM in the generated raster.* 
+```{r}
+# run once
+FCID <- raster("E:/Drive_sync/CBI_Unshared_Work/CARBCAT Development/Data/UW Modeled Biomass Resource/Treatment Tiffs/Remove100Percent.tif")
+
+#writeRaster(r, "FCID_UW.tif")
+```
+
+Load species distribution and proportion data
+```{r}
+# FCID <- raster(".tif")
+data <- readRDS("database") %>% 
+  dplyr::select(FCID2018, Species, proportion) %>% 
+  rename(ID = FCID2018)
+head(data)
+```
+
+Spread data into longer database. Number of rows will now match the FCIDs
+```{r}
+data %<>% 
+  spread(Species, proportion)
+data %<>% dplyr::select(-V1)
+
+data %>% head()
+```
+
+Join with FCID raster
+```{r}
+levels(FCID)[[1]] <- data
+levels(FCID)
+```
+
+# For reclassification
+```{r}
+#vals <- getValues(FCID) %>% unique() %>% desc()
+```
+
+Thinking through why ratify leaves out so many entries.
+Try to reclass FCID values to less digits
+```{r}
+#reclassify(FCID, matrix(vals, seq(1, 226203, 1)))?
+```
+
+
+*2/13/19*
+JUGLA last raster produced
+*2/14/19*
+PLRA last raster produced
+*2/15/19*
+TOCA last raser produced
+*2/18/19* 
+All rasters run
+```{r}
+names <- colnames(data)[2:ncol(data)]
+
+names
+names<-names[68:70]
+
+# for (i in vector) {
+#   rast <- deratify(FCID, names[i])
+#   writeRaster(rast, paste("E:/rasterSpecies/indiv_rasts_UW", names[i], ".tif", sep = ""))
+# }
+
+  
+names <- as.list(names)
+# Create temp folder for rasters that get created
+dir.create(file.path("E:/tempdir"), showWarnings = F)
+rasterOptions(tmpdir = file.path("E:/tempdir"))
+
+lapply(names, function(x) {
+  deratify(FCID, x) %>% 
+    writeRaster(paste("E:/rasterSpecies/indiv_rasts_UW/", x, ".tif", sep = ""))
+})
+
+```
+
+# Update for angiosperm/gymnosperm distinction used in foliage
+
+Read in data. 
+```{r}
+FCID <- raster("C:/Users/Max Blasdel/Desktop/Treatment Tiffs/Remove100Percent.tif")
+
+dat <- fread("full_database_decay.csv") %>% 
+  dplyr::select(FCID2018, Classification, proportion) %>% 
+  rename(ID = FCID2018)
+dat %>% head()
+```
+
+
+```{r eval=FALSE}
+dat %>%
+  spread(Classification, proportion)
+# error becuase there are multiple ang/gym in a given FCID
+```
+
+Sum the prpoportions and then spread
+```{r}
+dat %<>%
+  group_by(ID, Classification) %>% 
+  mutate(new_prop = sum(proportion)) %>% 
+  ungroup() %>% 
+  dplyr::select(-proportion) %>% 
+  distinct()
+
+dat %<>% 
+  spread(Classification, new_prop) %>% 
+  dplyr::select(-V1)
+dat
+```
+
+Needs to be coerced into a data table before proceeding
+```{r}
+dat %>% class()
+dat2 <- as.data.table(dat)
+dat2 %>% class()
+FCID
+
+levels(FCID)[[1]] <- dat2
+
+levels(FCID)
+```
+
+# outputs Angiosperm and Gymnosperm proportion rasters
+
+```{r}
+names <- colnames(dat[2:ncol(dat)])
+names <- as.list(names)
+
+# Create temp folder for rasters that get created
+dir.create(file.path("C:/Users/Max Blasdel/Desktop/tempdir"), showWarnings = F)
+rasterOptions(tmpdir = file.path("C:/Users/Max Blasdel/Desktop/tempdir"))
+
+lapply(names, function(x) {
+  deratify(FCID, x) %>% 
+    writeRaster(paste(x, ".tif", sep = ""))
+})
+
+```
+

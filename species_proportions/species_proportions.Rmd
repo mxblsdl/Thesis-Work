@@ -1,0 +1,102 @@
+---
+title: "Species Proportions from Residual Tree List"
+Date: "March 22, 2019"
+---
+
+# Purpose
+
+Create graphics showing species proportions for California based on total DBH
+
+```{r message=FALSE}
+library(tidyverse)
+library(data.table)
+```
+
+Using residual tree list from remove NA scenario as base data
+
+```{r}
+dat <- fread("../ResidualTreeLists/csv/rmna.csv") %>% 
+   select(-c(OBJECTID, TrtId, LCR, MCW))
+
+spec<-fread("../ResidualTreeLists/csv/Species.csv") %>%
+  select(c(PlantsCode, FVSCode, CommonName, ScientificName, Classification)) %>%
+  rename(Spp = FVSCode)
+spec
+```
+
+Read in the residual tree list and parse it down to proportional DBH grouped by FCID.
+
+```{r}
+dat <- dat %>%
+  group_by(FCID2018, Spp) %>%
+  #group_by(Spp) %>%
+  summarise(sumDBH = sum(DBH)) %>%
+  ungroup() %>%
+  group_by(FCID2018) %>%
+  mutate(proportion = sumDBH/sum(sumDBH))
+```
+
+Join more species data
+
+```{r}
+dat <- left_join(dat, spec, by = "Spp")
+```
+
+Calculate proportions values
+
+```{r}
+options(scipen = 20)
+dat %>% head()
+
+dat %>% 
+  group_by(Spp) %>% 
+  transmute(sumDBH = sum(sumDBH),
+            name = CommonName,
+            class = Classification) %>% 
+  distinct() %>% 
+  ungroup() %>% 
+  mutate(prop = sumDBH/sum(sumDBH) * 100) %>% 
+  arrange(desc(prop))# %>% 
+#  write.csv("species_props.csv") # wrote out for later use
+```
+
+#Processed Data
+
+Read in data
+```{r}
+dat <- read.csv("species_props.csv", stringsAsFactors = F, row.names = 'X')
+dat %>% head()
+```
+
+Simple function for changing names to capitalized
+```{r}
+simpleCap <- function(x) {
+  s <- strsplit(x, " ")[[1]]
+  paste(toupper(substring(s, 1,1)), substring(s, 2),
+      sep="", collapse=" ")
+}
+
+dat$name<- sapply(dat$name, simpleCap)
+```
+
+Thinking about some plots for the data
+
+```{r}
+dat$name <- dat$name %>% factor(levels = dat$name)
+
+dat %>% 
+  filter(prop >=1) %>% 
+  ggplot() +
+  theme_classic() +
+    geom_bar(aes(x = name, y= prop, fill = class), stat = "identity") + 
+    theme(axis.text.x = element_text(angle = 45, hjust = 1)) + 
+  ggtitle("Proportion of Total DBH of California Species") +
+  scale_fill_discrete(name= "Classification") +
+  xlab(NULL) + # include title here or not?
+  ylab("Proportion (%)")
+```
+
+```{r}
+ggsave("species_proportions.png", dpi = 300)
+```
+

@@ -1,0 +1,80 @@
+---
+title: "Reproject Climate Raster"
+author: "Max Blasdel"
+date: "January 31, 2019"
+output: html_document
+---
+
+# Purpose: Take output of climate mod script and reproject and resample to match UW data
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Load libraries
+
+```{r}
+library(gdalUtils)
+library(raster)
+```
+
+# Load original UW dataset, this tif is not used but contains the correct resolution and projection 
+
+```{r}
+UW_FCID <- raster("../../data/FCID/UW_FCID_no_wild.tif")
+
+UW_crs <- as.character(crs(UW_FCID))
+UW_ext <- bbox(extent(UW_FCID))
+tr <- c(30, 30)
+```
+
+Reproject the climate raster using nearest neighbor (should preserve values).
+
+A version three is being run with the slightly altered adair equation using 273.15 instead of 273. See climate_mod_adair.rmd for more information on this change.
+```{r}
+gdalwarp("../../climate_mod/adair_V3.tif",
+  "../../climate_mod/climate_V3.tif",
+  tr = tr,
+  r = "near",
+  t_srs = UW_crs,
+  te = c(UW_ext),
+  overwrite=TRUE)
+```
+
+# Reproject other climate models
+
+Find all Q10 tifs
+```{r}
+q10 <- dir("Sensitivity", pattern = ".tif", full.names = T)
+seq <- seq(1.4,2,.2)
+
+# loop through all rasters
+for (i in 1:length(q10)) {
+  gdalwarp(q10[i],
+  paste0("Sensitivity/climate", seq[i], ".tif"),
+  tr = tr,
+  r = "near",
+  t_srs = UW_crs,
+  te = c(UW_ext),
+  overwrite=TRUE)
+}
+```
+
+Load and save rasters. This reduces the size of the files considerably
+Note - I think the dots in the sequence was causing some problems with the file format
+```{r}
+cli <- dir("Sensitivity", pattern = "climate", full.names = T)
+cli
+climate <- raster(cli[1])
+climate2 <- raster(cli[2])
+climate3 <- raster(cli[3])
+climate4 <- raster(cli[4])
+
+# needs to be run indiv for some reason
+writeRaster(climate, filename = "Sensitivity/cli_1_4_min.tif")
+writeRaster(climate2, filename = "Sensitivity/cli_1_6_min.tif")
+writeRaster(climate3, filename = "Sensitivity/cli_1_8_min.tif")
+writeRaster(climate4, filename = "Sensitivity/cli_2_min.tif")
+
+```
+

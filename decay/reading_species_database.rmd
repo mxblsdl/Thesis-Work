@@ -1,0 +1,143 @@
+---
+title: "Mean Decay Values"
+author: "Max Blasdel"
+date: "September 28, 2018"
+output: html_document
+---
+Goes from the Reorganized species database to the mean species k csv.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This document will be used to call the species database, perform some data wrangling, calculate k values for foliage based on angiosperma/gymnosperm distinctions, create distinctions between fine and coarse wood, and add Other hard and softwood values.
+
+Load the desired packages.
+```{r include=FALSE}
+require(foreign)
+require(dplyr)
+require(tidyverse)
+```
+
+Read in the original species database and inspect.
+```{r}
+species.db<-read.csv("../data/Reorganized_species_database.csv", stringsAsFactors = F)%>% 
+  select(c(K.constant, Genus, Species, Size.Class..cm., Notes, Classification, Fuel.Class))%>%
+  rename(size.class = Size.Class..cm.)
+head(species.db)
+```
+
+I want to calculate affect of species regardless of foliage, but foliage is also a fuel size class. I also want to look at differences between angiosperm and gymnosperm foliage.
+```{r}
+foliage.gym<- species.db %>%
+  filter(Fuel.Class == "foliage", Classification == "Gymnosperm") %>%
+  mutate(k.foliage = mean(K.constant)) %>%
+  select(Classification, k.foliage) %>%
+  distinct()
+  
+foliage.ang<- species.db %>%
+  filter(Fuel.Class == "foliage", Classification == "Angiosperm") %>%
+  mutate(k.foliage = mean(K.constant)) %>%
+  select(Classification, k.foliage) %>%
+  distinct()
+
+foliage<-rbind(foliage.ang, foliage.gym)
+
+head(foliage)
+```
+
+
+I want to add a new column based on the classification for foliage type. 
+```{r}
+species.db<-inner_join(species.db, foliage, by="Classification")
+```
+
+
+I might want to remove the foliage and snag data before going forward. These values will throw off the overall genus means that will be calculated. 
+```{r}
+species.db<-species.db %>%
+  filter(Fuel.Class != "snag") %>%
+  filter(Fuel.Class != "foliage") %>% 
+  filter(Fuel.Class != "bark")
+```
+
+
+Make the distinction between CWD and FWD by seperating the data sets based on Fuel Class.
+```{r}
+FWD<-species.db %>%
+  filter(Fuel.Class=="twigs" | Fuel.Class=="branch" | Fuel.Class=="large branch") %>%
+#  mutate(class.k = mean(K.constant)) %>% #This is really just for how CWD and FWD as a whole differ
+  mutate(Class = "FWD") %>%
+  select(-Notes, -Fuel.Class, -size.class)
+```
+
+
+Same step for CWD
+```{r}
+CWD<-species.db %>%
+  filter(Fuel.Class == "log" | Fuel.Class == "large log") %>%
+#  mutate(class.k = mean(K.constant)) %>% # Same same
+  mutate(Class = "CWD") %>%
+  select(-Notes, -Fuel.Class, -size.class)
+```
+
+
+Calculate mean k values for genus species and FWD,CWD distinction
+```{r}
+fine_coarse<-rbind(FWD,CWD) %>%
+  group_by(Genus, Species, Class) %>%
+  summarise(mean.k=mean(K.constant)) %>%
+  spread(key = Class, mean.k, convert = T)
+ # This gives me the genus mean
+genus_mean<-species.db %>%
+  group_by(Genus) %>%
+  transmute(Genus.mean = mean(K.constant)) %>%
+  distinct()
+# This gives the mean based on species and size distinction with the foliage value and Ang/Gym distinction
+fine_coarse<-species.db %>%
+  select(Genus, Classification, k.foliage) %>%
+  right_join(fine_coarse, by="Genus") %>%
+  distinct()
+```
+
+
+Joining the datasets together
+```{r}
+species.db.update<-left_join(genus_mean,fine_coarse, by="Genus")
+```
+
+
+I want to create values for other hardwood and other softwood. I will use the angiosperm and gymnosperm distinctions here. 
+```{r}
+ang.gym.mean.values<-species.db %>%
+  group_by(Classification) %>%
+  summarise(Genus.mean = mean(K.constant)) %>%
+  select(-one_of("Classification")) %>%
+  mutate(Genus=c("Other hardwood", "Other Softwood")) %>%
+  mutate(Species= "Spp.") %>%
+  mutate(CWD = NA) %>%
+  mutate(FWD = NA)
+
+ang.gym.mean.values<-cbind(ang.gym.mean.values, foliage)
+
+ang.gym.mean.values
+```
+
+
+Linking the dataframes without the species specific information
+```{r}
+mean.values.all<-rbind.data.frame(species.db.update, ang.gym.mean.values)
+```
+
+
+Writing out the mean decay values by species for later use.
+```{r}
+write.csv(mean.values.all, file = "../csv/mean.species.k.csv", row.names = F)
+```
+
+
+
+
+
+
+

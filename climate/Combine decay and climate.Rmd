@@ -1,0 +1,40 @@
+---
+author: "Max Blasdel"
+date: "February 1, 2019"
+title: "Combining decay values"
+---
+# Purpose
+Combine the decay values and the climate modifier into new valued rasters
+
+```{r}
+library(raster)
+library(dplyr)
+```
+
+Read in data
+*Updated 2/8/19 with masked versioin*
+Decay rasters will be read in individually as they have been previously seperated out.
+```{r}
+# Decay rasters
+CWD <- raster("individual_rasters//masked/CWD.tif")
+FWD <- raster("individual_rasters/masked/FWD.tif")
+Foliage <- raster("individual_rasters/masked/Foliage.tif")
+
+# climate data
+climate <- raster("climate_mod/climate.tif")
+```
+
+Appears to work
+```{r}
+CWD_cm <- CWD * climate
+FWD_cm <- FWD * climate
+Foliage_cm <- Foliage * climate
+```
+
+Testing for size differences. 
+```{r}
+writeRaster(CWD_cm, file = "individual_rasters/masked/with_cm/CWD_cm.tif")
+writeRaster(FWD_cm, file = "individual_rasters/masked/with_cm/FWD_cm.tif")
+writeRaster(Foliage_cm, file = "individual_rasters/masked/with_cm/Foliage_cm.tif")
+```
+
